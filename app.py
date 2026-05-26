@@ -1,7 +1,7 @@
 import os
+import json
 import logging
 import requests
-import google.generativeai as genai
 from flask import Flask, request, jsonify
 
 logging.basicConfig(level=logging.INFO)
@@ -18,10 +18,9 @@ SYSTEM_PROMPT = os.environ.get(
     "You are a helpful, friendly WhatsApp assistant. Keep replies concise and use plain text only."
 )
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY
 )
 
 conversations = {}
@@ -29,35 +28,59 @@ MAX_HISTORY = 20
 
 
 def send_whatsapp_message(to, text):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "recipient_type": "individual",
-               "to": to, "type": "text", "text": {"body": text}}
+    url = "https://graph.facebook.com/v19.0/" + PHONE_NUMBER_ID + "/messages"
+    headers = {
+        "Authorization": "Bearer " + WHATSAPP_TOKEN,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "text",
+        "text": {"body": text}
+    }
     resp = requests.post(url, json=payload, headers=headers)
     if not resp.ok:
         logger.error("WhatsApp send failed: %s", resp.text)
 
 
 def mark_as_read(message_id):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
+    url = "https://graph.facebook.com/v19.0/" + PHONE_NUMBER_ID + "/messages"
+    headers = {
+        "Authorization": "Bearer " + WHATSAPP_TOKEN,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id
+    }
     requests.post(url, json=payload, headers=headers)
 
 
 def get_gemini_reply(user_id, user_text):
     history = conversations.setdefault(user_id, [])
+    history.append({"role": "user", "parts": [{"text": user_text}]})
+    if len(history) > MAX_HISTORY:
+        history = history[-MAX_HISTORY:]
+        conversations[user_id] = history
+
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": history
+    }
+
     try:
-        chat = model.start_chat(history=history)
-        response = chat.send_message(user_text)
-        reply = response.text
-        history.append({"role": "user", "parts": [user_text]})
-        history.append({"role": "model", "parts": [reply]})
-        if len(history) > MAX_HISTORY:
-            conversations[user_id] = history[-MAX_HISTORY:]
+        resp = requests.post(GEMINI_URL, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        reply = data["candidates"][0]["content"]["parts"][0]["text"]
+        history.append({"role": "model", "parts": [{"text": reply}]})
         return reply
     except Exception as e:
         logger.error("Gemini error: %s", e)
+        history.pop()
         return "Sorry, I am having trouble right now. Please try again!"
 
 
@@ -73,7 +96,7 @@ def handle_text(from_number, message_id, text):
 
 def handle_image(from_number, message_id, caption):
     mark_as_read(message_id)
-    prompt = "[User sent an image with caption: " + caption + "]" if caption else "[User sent an image]"
+    prompt = "[User sent an image: " + caption + "]" if caption else "[User sent an image]"
     reply = get_gemini_reply(from_number, prompt)
     send_whatsapp_message(from_number, reply)
 
