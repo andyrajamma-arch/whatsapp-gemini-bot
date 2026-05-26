@@ -58,7 +58,7 @@ def get_gemini_reply(user_id, user_text):
         return reply
     except Exception as e:
         logger.error("Gemini error: %s", e)
-        return "Sorry, I'm having trouble right now. Please try again!"
+        return "Sorry, I am having trouble right now. Please try again!"
 
 
 def handle_text(from_number, message_id, text):
@@ -73,7 +73,7 @@ def handle_text(from_number, message_id, text):
 
 def handle_image(from_number, message_id, caption):
     mark_as_read(message_id)
-    prompt = f"[User sent an image with caption: {caption}]" if caption else "[User sent an image]"
+    prompt = "[User sent an image with caption: " + caption + "]" if caption else "[User sent an image]"
     reply = get_gemini_reply(from_number, prompt)
     send_whatsapp_message(from_number, reply)
 
@@ -109,7 +109,7 @@ def webhook():
                     else:
                         mark_as_read(message_id)
                         send_whatsapp_message(from_number,
-                            f"I received your {msg_type}, but I can only handle text and images!")
+                            "I received your " + msg_type + ", but I can only handle text and images!")
     except Exception as e:
         logger.error("Webhook error: %s", e)
     return jsonify({"status": "ok"}), 200
